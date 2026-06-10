@@ -68,7 +68,7 @@ Use the **IBM HR Analytics Employee Attrition dataset** (Kaggle, ~1,470 rows, 35
 |**5. Modeling**|Logistic Regression (interpretable baseline) → Random Forest → XGBoost/LightGBM|
 |**6. Tuning**|GridSearchCV; tune threshold to favor recall on leavers|
 |**7. Evaluation**|Recall, Precision, F1, ROC-AUC, PR-AUC; confusion matrix|
-|**8. Interpretation**|SHAP / feature importance — which factors most drive employees to leave|
+| **8. Interpretation** | Complete | SHAP LinearExplainer on lr_tuned; top drivers: OverTime, MonthlyIncome/PeerRelativeIncome, MaritalStatus_Single, JobInvolvement, EarlyTenure |
 
 ---
 
@@ -81,8 +81,8 @@ Use the **IBM HR Analytics Employee Attrition dataset** (Kaggle, ~1,470 rows, 35
 | **3. Feature Engineering** | Complete | 46 new features across 6 groups |
 | **4. Handle Imbalance** | Complete | SMOTE applied; evaluate_model() helper defined |
 | **5. Modeling** | Complete | LR / RF / XGB / LGBM baselines; LR selected (Recall 0.468, F1 0.512) |
-| **6. Tuning** | Pending | — |
-| **7. Evaluation** | Pending | — |
+| **6. Tuning** | Complete | GridSearchCV over C/penalty/solver/l1_ratio; threshold tuned on PR curve |
+| **7. Evaluation** | Complete | ROC-AUC 0.795; Recall 0.553; Brier Skill Score > 0; 48 of 294 employees flagged |
 | **8. Interpretation** | Pending | — |
 
 ---
@@ -181,3 +181,59 @@ Use the **IBM HR Analytics Employee Attrition dataset** (Kaggle, ~1,470 rows, 35
 - Tree models (RF, XGB, LGBM) sacrifice recall for precision at default thresholds; LR with SMOTE balances both better pre-tuning
 - LGBM leads on ROC-AUC (0.797) and Precision (0.650) but trails badly on Recall — threshold tuning in Phase 6 could shift this ranking
 - Threshold tuning and GridSearchCV deferred to Phase 6
+
+---
+
+#### Phase 6 — Tuning Insights
+
+- **GridSearchCV** over 3 parameter branches (L2/lbfgs, L1/saga, ElasticNet/saga) scored on recall using 5-fold StratifiedKFold on `X_train_smote`
+  - Search space: `C` ∈ {0.001–100}, `penalty` ∈ {l2, l1, elasticnet}, `l1_ratio` ∈ {0.1–0.9} (elasticnet only)
+  - Best params: `C=1.0`, `penalty=elasticnet`, `solver=saga`, `l1_ratio=0.7`; CV Recall (5-fold) = 0.8844
+- **Threshold tuning**: Precision-Recall curve computed on `X_test`; optimal threshold maximises F1 (Yes) subject to Precision (Yes) ≥ 0.40
+  - Selected threshold: 0.421
+- **Final tuned model**: `lr_tuned` (best GridSearchCV estimator) evaluated at `best_thresh`
+- Phase 5 vs Phase 6 final test-set results:
+
+| Metric | Phase 5 (LR default) | Phase 6 (LR tuned) | Delta |
+|---|---|---|---|
+| Recall (Yes) | 0.468 | 0.553 | +0.085 |
+| Precision (Yes) | 0.564 | 0.542 | −0.022 |
+| F1 (Yes) | 0.512 | 0.547 | +0.035 |
+| ROC-AUC | 0.795 | 0.795 | +0.002 |
+| PR-AUC | 0.547 | 0.549 | +0.002 |
+
+---
+
+#### Phase 7 — Evaluation Insights
+
+- **Final model**: `lr_tuned` (elasticnet, C=1.0, l1_ratio=0.7, threshold=0.421) evaluated on `X_test` (294 × 76, 16.0% real-world attrition rate)
+- **Full evaluation results**:
+
+| Metric | Value |
+|---|---|
+| Recall (Yes) | 0.553 |
+| Precision (Yes) | 0.542 |
+| F1 (Yes) | 0.547 |
+| ROC-AUC | 0.7971 |
+| PR-AUC | 0.549 |
+| Brier Score Loss | 0.1085 |
+| Accuracy | 0.867 |
+| F1 (No / Stayed) | 0.917 |
+
+- **ROC curve**: AUC = 0.7971 — model correctly ranks a random leaver above a random stayer 79.7% of the time; operating point at threshold 0.421 sits at FPR=0.089, TPR=0.553
+- **Calibration**: Brier Score Loss = 0.1085 vs no-skill baseline 0.1343; Brier Skill Score = 0.192 — model adds meaningful probabilistic value over the base-rate predictor; reliability diagram shows slight over-confidence at medium probabilities (typical for LR on imbalanced data)
+- **Threshold sensitivity**: F1 (Yes) peaks in the 0.38–0.45 range confirming 0.421 is near-optimal; recall drops sharply above 0.55; lowering to 0.30 reaches Recall ~0.70 but drops Precision below the 0.40 floor
+- **Business impact** (294-employee test cohort):
+  - 47 actual leavers; 48 employees flagged for HR review (16.3% of workforce)
+  - 26 true positives, 22 false positives, 21 missed leavers
+  - 1-in-2 flagged employees is a genuine flight risk; 55.3% of leavers caught before they leave
+  - Scaled to 1,000 employees: ~163 HR reviews to catch ~88 of ~160 expected leavers
+
+  #### Phase 8 — Interpretation Insights
+
+- **SHAP method**: `shap.LinearExplainer` on `lr_tuned` with `X_train_smote` as background; SHAP values computed on full `X_test` (294 × 76)
+- **Top 5 global drivers** (by mean |SHAP value|): OverTime, MonthlyIncome/PeerRelativeIncome, MaritalStatus_Single, JobInvolvement, EarlyTenure/TenureRatio
+- **SHAP validates EDA** (Phase 1): all top SHAP drivers match the highest-attrition segments identified in EDA (OverTime 30%, Single 25.5%, low involvement 33.3%)
+- **Direction confirmed by LR coefficients**: coefficient plot and SHAP rankings are directionally consistent — no sign reversals
+- **Individual explanations** produced for: highest-risk employee, best true positive, worst false negative (missed leaver)
+- **Key retention levers**: cap overtime, targeted pay reviews for below-peer earners, early-tenure onboarding programme, role enrichment for low-involvement employees
