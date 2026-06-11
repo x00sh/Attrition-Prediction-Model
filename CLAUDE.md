@@ -10,43 +10,37 @@
 
 ### Dataset
 
-Use the **IBM HR Analytics Employee Attrition dataset** (Kaggle, ~1,470 rows, 35 features).
+Use the **IBM HR Analytics Employee Attrition dataset** (Kaggle) — `WA_Fn-UseC_-HR-Employee-Attrition.csv` at repo root, 1,470 rows × 35 columns. Features include:
 
-#### Columns used
+- **Job details:** job role, department, job level, years at company, years in current role
+- **Compensation:** monthly income, salary hike percentage, stock options
+- **Satisfaction:** job satisfaction, environment satisfaction, work-life balance, relationship satisfaction
+- **Work patterns:** overtime, business travel frequency, distance from home
+- **Demographics:** age, education, marital status
+- **Target:** Attrition (Yes / No)
 
-| Column | Type | Notes |
-|---|---|---|
-| **Age** | Numeric | Employee age |
-| **Attrition** | Categorical | Target variable — Yes / No |
-| **BusinessTravel** | Categorical | Non-Travel / Travel_Rarely / Travel_Frequently |
-| **DailyRate** | Numeric | Daily pay rate |
-| **Department** | Categorical | HR / R&D / Sales |
-| **DistanceFromHome** | Numeric | Miles from home |
-| **Education** | Ordinal (1–5) | 1=Below College … 5=Doctor |
-| **EducationField** | Categorical | HR / Life Sciences / Marketing / Medical / Other / Technical Degree |
-| **EnvironmentSatisfaction** | Ordinal (1–4) | 1=Low … 4=Very High |
-| **Gender** | Categorical | Female / Male |
-| **HourlyRate** | Numeric | Hourly pay rate |
-| **JobInvolvement** | Ordinal (1–4) | 1=Low … 4=Very High |
-| **JobLevel** | Ordinal (1–5) | Seniority level |
-| **JobRole** | Categorical | 9 roles (e.g. Manager, Sales Exec, Research Scientist) |
-| **JobSatisfaction** | Ordinal (1–4) | 1=Low … 4=Very High |
-| **MaritalStatus** | Categorical | Divorced / Married / Single |
-| **MonthlyIncome** | Numeric | Monthly salary |
-| **MonthlyRate** | Numeric | Monthly rate (different from income) |
-| **NumCompaniesWorked** | Numeric | Prior employers count |
-| **OverTime** | Categorical | Yes / No |
-| **PercentSalaryHike** | Numeric | Last raise percentage |
-| **PerformanceRating** | Ordinal (1–4) | 1=Low … 4=Outstanding |
-| **RelationshipSatisfaction** | Ordinal (1–4) | 1=Low … 4=Very High |
-| **StockOptionLevel** | Ordinal (0–3) | Stock option grant level |
-| **TotalWorkingYears** | Numeric | Total career experience |
-| **TrainingTimesLastYear** | Numeric | Training sessions attended |
-| **WorkLifeBalance** | Ordinal (1–4) | 1=Bad … 4=Best |
-| **YearsAtCompany** | Numeric | Tenure at current company |
-| **YearsInCurrentRole** | Numeric | Time in current role |
-| **YearsSinceLastPromotion** | Numeric | Time since last promotion |
-| **YearsWithCurrManager** | Numeric | Time with current manager |
+---
+
+### File Structure
+
+```
+├── WA_Fn-UseC_-HR-Employee-Attrition.csv       # Raw dataset (1,470 rows × 35 cols)
+├── notebooks/
+│   ├── eda-presentation.ipynb
+│   ├── feature-engineering.ipynb
+│   ├── handle-imbalance.ipynb
+│   ├── modeling.ipynb
+│   ├── tuning.py, tuning.md                    # Phase 6 source cells (merge via combine_notebook.py)
+│   └── tuning.ipynb                            # (generated after the user confirms the run)
+├── processed/                                  # Persisted outputs (train/test splits, scaler, SMOTE matrices)
+│   ├── X_train.parquet, X_test.parquet
+│   ├── y_train.parquet, y_test.parquet
+│   ├── X_train_smote.parquet, y_train_smote.parquet
+│   ├── scaler.joblib, scale_cols.joblib
+│   └── ...
+└── TO BE DELETED/                              # Deprecated; do not use
+    └── attrition-prediction-model.ipynb        # (Original monolithic notebook; superseded by split pipeline)
+```
 
 ---
 
@@ -57,18 +51,36 @@ Use the **IBM HR Analytics Employee Attrition dataset** (Kaggle, ~1,470 rows, 35
 
 ---
 
+### Repository Structure & Pipeline Architecture
+
+The project is implemented as **per-stage notebooks** in `notebooks/`. Stages communicate **only via files persisted to `processed/`** — there is no in-memory hand-off between notebooks. Helper functions (e.g. an `evaluate_model()` utility) must be defined in the notebook that uses them; they cannot carry across stages.
+
+| Stage notebook | Phases | Input | Output to `processed/` |
+|---|---|---|---|
+| `notebooks/eda-presentation.ipynb` | 1. EDA | raw CSV | none (presentation only) |
+| `notebooks/feature-engineering.ipynb` | 2–3. Preprocessing + Feature Engineering | raw CSV | `X_train.parquet` (1176×56), `X_test.parquet` (294×56), `y_train.parquet`, `y_test.parquet`, `scaler.joblib`, `scale_cols.joblib` |
+| `notebooks/handle-imbalance.ipynb` | 4. Handle Imbalance | the four matrices above | `X_train_smote.parquet` (1972×56), `y_train_smote.parquet` (50/50) |
+| `notebooks/modeling.ipynb` | 5. Modeling | all four matrices + SMOTE matrices | `cv_results.parquet`, `model_selection.joblib`, fitted models in `models/` (logreg_smote.joblib, random_forest.joblib, xgboost.joblib, lightgbm.joblib) |
+| `notebooks/tuning.ipynb` (source: `tuning.py` + `tuning.md`) | 6. Tuning | `X_train`/`y_train`/`X_test`/`y_test` + `cv_results.parquet` (SMOTE matrices NOT used — SMOTE lives inside the LogReg pipeline) | `tuning_results.parquet`, `threshold_sweep.parquet`, `best_params.joblib`, `tuning_selection.joblib` (leader + threshold), `models/*_tuned.joblib`, `models/final_model.joblib` |
+
+**Convention for future stages (5–8):** load everything you need from `processed/`, persist anything a downstream stage will need.
+
+**Deprecated:** `TO BE DELETED/attrition-prediction-model.ipynb` is the original monolithic notebook. Do not extend it — its feature matrix (76 cols) and results are superseded by the split pipeline (56 cols).
+
+---
+
 ### Suggested Workflow
 
 |Phase|Tasks|
 |---|---|
 |**1. EDA**|Attrition rate by overtime/role/satisfaction/income, age and tenure patterns, class imbalance check|
 |**2. Preprocessing**|Encode categoricals (role, travel, marital status), scale numerics, drop constant/ID columns|
-|**3. Feature Engineering**|Income-per-level ratios, tenure ratios, satisfaction composite scores, compensation scores|
+|**3. Feature Engineering**|Income-per-level ratios, tenure ratios, satisfaction composite scores|
 |**4. Handle Imbalance**|Attrition is the minority (~16%) — use SMOTE, class weights, or threshold tuning|
 |**5. Modeling**|Logistic Regression (interpretable baseline) → Random Forest → XGBoost/LightGBM|
 |**6. Tuning**|GridSearchCV; tune threshold to favor recall on leavers|
 |**7. Evaluation**|Recall, Precision, F1, ROC-AUC, PR-AUC; confusion matrix|
-| **8. Interpretation** | Complete | SHAP LinearExplainer on lr_tuned; top drivers: OverTime, MonthlyIncome/PeerRelativeIncome, MaritalStatus_Single, JobInvolvement, EarlyTenure |
+|**8. Interpretation**|SHAP / feature importance — which factors most drive employees to leave|
 
 ---
 
@@ -76,13 +88,13 @@ Use the **IBM HR Analytics Employee Attrition dataset** (Kaggle, ~1,470 rows, 35
 
 | Phase | Status | Notes |
 |---|---|---|
-| **1. EDA** | Complete | Key drivers identified; class imbalance confirmed |
-| **2. Preprocessing** | Complete | Train/test split, encoding, scaling done |
-| **3. Feature Engineering** | Complete | 46 new features across 6 groups |
-| **4. Handle Imbalance** | Complete | SMOTE applied; evaluate_model() helper defined |
-| **5. Modeling** | Complete | LR / RF / XGB / LGBM baselines; LR selected (Recall 0.468, F1 0.512) |
-| **6. Tuning** | Complete | GridSearchCV over C/penalty/solver/l1_ratio; threshold tuned on PR curve |
-| **7. Evaluation** | Complete | ROC-AUC 0.795; Recall 0.553; Brier Skill Score > 0; 48 of 294 employees flagged |
+| **1. EDA** | Complete | `notebooks/eda-presentation.ipynb` — key drivers identified; class imbalance confirmed |
+| **2. Preprocessing** | Complete | `notebooks/feature-engineering.ipynb` — split, encoding, scaling |
+| **3. Feature Engineering** | Complete | `notebooks/feature-engineering.ipynb` — 13 new features across 4 groups |
+| **4. Handle Imbalance** | Complete | `notebooks/handle-imbalance.ipynb` — SMOTE applied, outputs persisted |
+| **5. Modeling** | Complete | `notebooks/modeling.ipynb` — 4 models compared; LogReg (SMOTE) selected as leader |
+| **6. Tuning** | Source written | `notebooks/tuning.py` + `tuning.md` — awaiting user run; merge to `.ipynb` after confirming. Insights to be filled in from the run results |
+| **7. Evaluation** | Pending | — |
 | **8. Interpretation** | Pending | — |
 
 ---
@@ -110,130 +122,72 @@ Use the **IBM HR Analytics Employee Attrition dataset** (Kaggle, ~1,470 rows, 35
 
 - Dropped 4 constant/ID columns: `EmployeeCount`, `EmployeeNumber`, `Over18`, `StandardHours`
 - Target encoded: `Attrition` → Yes=1 / No=0
-- Stratified 80/20 train/test split preserves 16% attrition rate in both sets
-  - Train: 1,176 rows (16.2% attrition) | Test: 294 rows (16.0% attrition)
-- Categorical encoding strategy:
+- Deterministic encodings run **pre-split** (no data statistics involved):
   - Binary: `Gender` (Female=0, Male=1), `OverTime` (No=0, Yes=1)
   - Ordinal: `BusinessTravel` (Non-Travel=0, Travel_Rarely=1, Travel_Frequently=2)
-  - One-hot (with dropped reference): `Department` (ref=HR), `EducationField` (ref=Below College), `JobRole` (ref=Sales Executive), `MaritalStatus` (ref=Divorced)
-- StandardScaler fit on X_train only, applied to X_test — no leakage
-- **Final shapes**: X_train (1176, 76), X_test (294, 76); 59 scaled floats + 17 boolean flags; zero NaN values
+  - One-hot (with dropped reference, `drop_first`): `Department`, `EducationField`, `JobRole`, `MaritalStatus`
+  - → 45 encoded columns before feature engineering
+- Stratified 80/20 train/test split preserves the ~16% attrition rate in both sets
+  - Train: 1,176 rows (16.2% attrition) | Test: 294 rows (16.0% attrition)
+- **Everything statistical is fit on train only** (leakage guardrail): every threshold, peer median, and the scaler are computed from `X_train` and applied to `X_test`
+- StandardScaler fit on the 30 continuous columns; the 26 flag/dummy ({0,1}) columns are left unscaled; scaler persisted as `processed/scaler.joblib` + `processed/scale_cols.joblib`
+- **Final shapes**: X_train (1176, 56), X_test (294, 56); zero NaN/inf; DataFrames persisted as parquet (column names preserved for SHAP in Phase 8)
 
 ---
 
 #### Phase 3 — Feature Engineering Insights
 
-46 new features created across 6 groups. Key signals found:
+13 new features created across 4 groups, all driven by EDA signals and computed from **train-fit statistics only**:
 
-**Strongest attrition signals from engineered features:**
-- `LowIncome_OT` (IsLowIncome × OverTime): **54.1% attrition** — highest interaction signal in dataset
-- `Single_OT` (Single × OverTime): 49.6% attrition (131 employees)
-- `IsHighRisk` (OverTime + IsLowIncome + EarlyTenure, 3-way flag): 49.6% attrition
-- `FreqTravel_LowWLB` (Frequent travel × WLB=1): 46.2% attrition (13 employees)
+| Group | Features |
+|---|---|
+| OverTime interactions | `Single_OT`, `FreqTravel_OT`, `IsHighRisk` (OverTime × IsLowIncome × EarlyTenure) |
+| Pay vs peers | `PeerRelativeIncome` (vs JobRole × JobLevel peer median), `IsLowIncome` (train 33rd pct = $3,733), `IncomePerLevel` |
+| Tenure / career | `EarlyTenure` (≤2 yrs), `TenureRatio`, `PromotionOverdue` (≥6 yrs), `JobHoppingIndex` |
+| Engagement / well-being | `SatisfactionComposite`, `EngagementScore`, `IsLowEngagement` |
 
-**Compensation (4 features):** `IncomePerLevel`, `CompensationScore`, `IncomeVsExperience`, `RateDiscrepancy`
-- Leavers earn ~8% less per job level when controlling for seniority
-
-**Tenure & Career (5 features):** `TenureRatio`, `PromotionStagnationRatio`, `RoleStability` (corr –0.16), `ManagerStability`, `JobHoppingIndex`
-- TenureRatio (YearsAtCompany / TotalWorkingYears): leavers median 0.50 vs stayers 0.67
-- JobHoppingIndex (NumCompaniesWorked / TotalWorkingYears): leavers median 0.33 vs stayers 0.17
-
-**Satisfaction Composites (3 features):** `SatisfactionComposite` (corr –0.16), `EngagementScore`, `WellbeingScore`
-
-**Risk Flags (4 features):** `EarlyTenure`, `LowWLBFlag`, `IsLowEngagement`, `PromotionOverdue`
-
-**Post-split features (computed from train stats only to prevent leakage):** `IsLowIncome` (threshold: $3,733 = 33rd pct of train), `LowIncome_OT`, `IsHighRisk`, `PeerRelativeIncome` (vs JobRole × JobLevel peer median)
+- Raw `JobRole` / `MaritalStatus` are stashed as `_JobRole` / `_MaritalStatus` helper columns before one-hot encoding (the peer-income and Single-flag features need them), then dropped after engineering
+- Ratio features guard against divide-by-zero (`TotalWorkingYears` is 0 for 11 employees)
+- Peer-income groups: 26 (JobRole × JobLevel) medians from train; unseen groups fall back to the train global median
 
 ---
 
 #### Phase 4 — Handle Imbalance Insights
 
+- **Implemented in `notebooks/handle-imbalance.ipynb`**: loads the four matrices persisted by `notebooks/feature-engineering.ipynb` from `processed/`
 - **Imbalance confirmed**: 986 No / 190 Yes in training set (5.2:1 ratio); a constant "No" classifier scores 83.8% accuracy — accuracy is not a useful metric
-- **SMOTE applied** (`k_neighbors=5`, `random_state=42`) to training data only → `X_train_smote` (1,972 × 76), `y_train_smote` (986 No / 986 Yes, 50/50)
+- **SMOTE applied** (`k_neighbors=5`, `random_state=42`) to training data only → `X_train_smote` (1,972 × 56), `y_train_smote` (986 No / 986 Yes, 50/50)
   - 796 synthetic minority examples generated by interpolation in feature space
-  - `X_train_smote` returned as a DataFrame (column names preserved for SHAP in Phase 8)
-- **Test set untouched**: `X_test` (294 × 76) and `y_test` retain the original 16% attrition rate — evaluation always reflects real-world class frequencies
+  - `X_train_smote` kept as a DataFrame (column names preserved for SHAP in Phase 8)
+- **Test set untouched**: `X_test` (294 × 56) and `y_test` retain the original 16% attrition rate — evaluation always reflects real-world class frequencies
+- **Persisted for the modeling stage**: `processed/X_train_smote.parquet`, `processed/y_train_smote.parquet`
 - **Two training datasets available for Phase 5**:
   - `X_train_smote` / `y_train_smote` — for models without a native class-weight parameter (e.g. base Logistic Regression)
-  - `X_train` / `y_train` — used with `class_weight='balanced'` in sklearn estimators (Random Forest, XGBoost, LightGBM)
+  - `X_train` / `y_train` (already in `processed/`) — used with `class_weight='balanced'` / `scale_pos_weight` in tree models (Random Forest, XGBoost, LightGBM)
 - **Threshold tuning** deferred to Phase 6 after model selection
-- **`evaluate_model(model, X, y, label="")`** helper defined — prints classification report (precision / recall / F1 per class), ROC-AUC, PR-AUC, and confusion matrix; reused in Phases 5–7
 - **Priority metrics established**: Recall (Yes) → F1 (Yes) → ROC-AUC → PR-AUC
+
+---
 
 #### Phase 5 — Modeling Insights
 
-- Four classifiers trained at default hyperparameters on test set (294 samples, 16% attrition)
-- Training data policy:
-  - Logistic Regression: X_train_smote / y_train_smote (SMOTE 50/50)
-  - Random Forest: X_train + class_weight=balanced
-  - XGBoost: X_train + scale_pos_weight=5.19
-  - LightGBM: X_train + is_unbalance=True
-- **Phase 5 winner:** Logistic Regression (highest Recall (Yes) = 0.468 on test set; best F1 0.512)
-- Test-set results:
-
-| Model | Recall | Precision | F1 | ROC-AUC | PR-AUC |
-|---|---|---|---|---|---|
-| LR | 0.468 | 0.564 | 0.512 | 0.795 | 0.547 |
-| RF | 0.447 | 0.488 | 0.467 | 0.782 | 0.446 |
-| XGBoost | 0.362 | 0.586 | 0.447 | 0.791 | 0.530 |
-| LGBM | 0.277 | 0.650 | 0.388 | 0.797 | 0.537 |
-
-- Tree models (RF, XGB, LGBM) sacrifice recall for precision at default thresholds; LR with SMOTE balances both better pre-tuning
-- LGBM leads on ROC-AUC (0.797) and Precision (0.650) but trails badly on Recall — threshold tuning in Phase 6 could shift this ranking
-- Threshold tuning and GridSearchCV deferred to Phase 6
-
----
-
-#### Phase 6 — Tuning Insights
-
-- **GridSearchCV** over 3 parameter branches (L2/lbfgs, L1/saga, ElasticNet/saga) scored on recall using 5-fold StratifiedKFold on `X_train_smote`
-  - Search space: `C` ∈ {0.001–100}, `penalty` ∈ {l2, l1, elasticnet}, `l1_ratio` ∈ {0.1–0.9} (elasticnet only)
-  - Best params: `C=1.0`, `penalty=elasticnet`, `solver=saga`, `l1_ratio=0.7`; CV Recall (5-fold) = 0.8844
-- **Threshold tuning**: Precision-Recall curve computed on `X_test`; optimal threshold maximises F1 (Yes) subject to Precision (Yes) ≥ 0.40
-  - Selected threshold: 0.421
-- **Final tuned model**: `lr_tuned` (best GridSearchCV estimator) evaluated at `best_thresh`
-- Phase 5 vs Phase 6 final test-set results:
-
-| Metric | Phase 5 (LR default) | Phase 6 (LR tuned) | Delta |
-|---|---|---|---|
-| Recall (Yes) | 0.468 | 0.553 | +0.085 |
-| Precision (Yes) | 0.564 | 0.542 | −0.022 |
-| F1 (Yes) | 0.512 | 0.547 | +0.035 |
-| ROC-AUC | 0.795 | 0.795 | +0.002 |
-| PR-AUC | 0.547 | 0.549 | +0.002 |
-
----
-
-#### Phase 7 — Evaluation Insights
-
-- **Final model**: `lr_tuned` (elasticnet, C=1.0, l1_ratio=0.7, threshold=0.421) evaluated on `X_test` (294 × 76, 16.0% real-world attrition rate)
-- **Full evaluation results**:
-
-| Metric | Value |
-|---|---|
-| Recall (Yes) | 0.553 |
-| Precision (Yes) | 0.542 |
-| F1 (Yes) | 0.547 |
-| ROC-AUC | 0.7971 |
-| PR-AUC | 0.549 |
-| Brier Score Loss | 0.1085 |
-| Accuracy | 0.867 |
-| F1 (No / Stayed) | 0.917 |
-
-- **ROC curve**: AUC = 0.7971 — model correctly ranks a random leaver above a random stayer 79.7% of the time; operating point at threshold 0.421 sits at FPR=0.089, TPR=0.553
-- **Calibration**: Brier Score Loss = 0.1085 vs no-skill baseline 0.1343; Brier Skill Score = 0.192 — model adds meaningful probabilistic value over the base-rate predictor; reliability diagram shows slight over-confidence at medium probabilities (typical for LR on imbalanced data)
-- **Threshold sensitivity**: F1 (Yes) peaks in the 0.38–0.45 range confirming 0.421 is near-optimal; recall drops sharply above 0.55; lowering to 0.30 reaches Recall ~0.70 but drops Precision below the 0.40 floor
-- **Business impact** (294-employee test cohort):
-  - 47 actual leavers; 48 employees flagged for HR review (16.3% of workforce)
-  - 26 true positives, 22 false positives, 21 missed leavers
-  - 1-in-2 flagged employees is a genuine flight risk; 55.3% of leavers caught before they leave
-  - Scaled to 1,000 employees: ~163 HR reviews to catch ~88 of ~160 expected leavers
-
-  #### Phase 8 — Interpretation Insights
-
-- **SHAP method**: `shap.LinearExplainer` on `lr_tuned` with `X_train_smote` as background; SHAP values computed on full `X_test` (294 × 76)
-- **Top 5 global drivers** (by mean |SHAP value|): OverTime, MonthlyIncome/PeerRelativeIncome, MaritalStatus_Single, JobInvolvement, EarlyTenure/TenureRatio
-- **SHAP validates EDA** (Phase 1): all top SHAP drivers match the highest-attrition segments identified in EDA (OverTime 30%, Single 25.5%, low involvement 33.3%)
-- **Direction confirmed by LR coefficients**: coefficient plot and SHAP rankings are directionally consistent — no sign reversals
-- **Individual explanations** produced for: highest-risk employee, best true positive, worst false negative (missed leaver)
-- **Key retention levers**: cap overtime, targeted pay reviews for below-peer earners, early-tenure onboarding programme, role enrichment for low-involvement employees
+- **Implemented in `notebooks/modeling.ipynb`**: Compares four classifier families using 5-fold stratified cross-validation on `X_train` (never mixing in synthetic SMOTE samples during CV to avoid fold leakage)
+- **Imbalance handling strategy per model**:
+  - Logistic Regression: SMOTE inside an `imblearn` pipeline (refit on each training fold)
+  - Random Forest: `class_weight='balanced'` to penalize minority misclassification
+  - XGBoost & LightGBM: `scale_pos_weight ≈ 5.19` (ratio of negatives to positives)
+- **Cross-validated performance (5-fold, on original ~16% attrition rate in each fold)**:
+  | Model | Recall | F1 | ROC-AUC | PR-AUC |
+  |---|---|---|---|---|
+  | LogReg (SMOTE) | 0.516 | 0.511 | 0.793 | 0.562 |
+  | LightGBM | 0.437 | 0.522 | 0.808 | 0.587 |
+  | XGBoost | 0.426 | 0.520 | 0.785 | 0.563 |
+  | RandomForest | 0.384 | 0.461 | 0.797 | 0.551 |
+- **Leader selected**: LogReg (SMOTE) by cross-validated recall (0.516), then F1 (0.511) — highest recall captures more at-risk leavers, aligning with business priority
+- **Test-set sanity check** (indicative only; authoritative evaluation deferred to Phase 7):
+  - LogReg (SMOTE): 0.468 recall, 0.463 F1 — confirms CV picture transfers to unseen data
+  - Other models show lower recall on test, consistent with their CV rankings
+- **Artifacts persisted**:
+  - `cv_results.parquet`: Full cross-validation comparison table
+  - `model_selection.joblib`: Leader name + selection metric metadata
+  - `processed/models/`: All four fitted models (logreg_smote.joblib, random_forest.joblib, xgboost.joblib, lightgbm.joblib) pre-fitted for Phase 6 tuning
