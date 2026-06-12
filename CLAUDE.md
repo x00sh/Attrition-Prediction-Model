@@ -25,6 +25,13 @@ Use the **IBM HR Analytics Employee Attrition dataset** (Kaggle) — `WA_Fn-UseC
 
 ```
 ├── WA_Fn-UseC_-HR-Employee-Attrition.csv       # Raw dataset (1,470 rows × 35 cols)
+├── app.py                                      # Streamlit prediction UI (Phase 9 — see README_UI.md)
+├── requirements.txt                            # Runtime deps for the UI
+├── src/                                        # UI support package (importable, not notebooks)
+│   ├── preprocess.py                           # raw inputs → scaled 56-feature vector (mirrors feature-engineering.ipynb)
+│   └── predict.py                              # loads final_model + scaler → {probability, prediction, label, SHAP drivers}
+├── tests/
+│   └── test_parity.py                          # proves UI transform reproduces X_test.parquet exactly (0.0 diff)
 ├── notebooks/
 │   ├── eda-presentation.ipynb
 │   ├── feature-engineering.ipynb
@@ -33,7 +40,9 @@ Use the **IBM HR Analytics Employee Attrition dataset** (Kaggle) — `WA_Fn-UseC
 │   ├── tuning.py, tuning.md                    # Phase 6 source cells (merge via combine_notebook.py)
 │   ├── tuning.ipynb                            # Phase 6 — complete
 │   ├── evaluation.ipynb                        # Phase 7 — complete
+│   ├── interpretation.ipynb                    # Phase 8 — complete (requires `shap`: pip install shap)
 │   └── outputs/                                # Phase 7 figures (confusion_matrices, roc_curves, pr_curves, threshold_tradeoff .png)
+│                                               # Phase 8 figures (shap_bar, shap_summary, importance_comparison, shap_dependence, shap_waterfall_tp, shap_waterfall_fn .png)
 ├── processed/                                  # Persisted outputs (train/test splits, scaler, SMOTE matrices)
 │   ├── X_train.parquet, X_test.parquet
 │   ├── y_train.parquet, y_test.parquet
@@ -65,6 +74,7 @@ The project is implemented as **per-stage notebooks** in `notebooks/`. Stages co
 | `notebooks/modeling.ipynb` | 5. Modeling | all four matrices + SMOTE matrices | `cv_results.parquet`, `model_selection.joblib`, fitted models in `models/` (logreg_smote.joblib, random_forest.joblib, xgboost.joblib, lightgbm.joblib) |
 | `notebooks/tuning.ipynb` (source: `tuning.py` + `tuning.md`) | 6. Tuning | `X_train`/`y_train`/`X_test`/`y_test` + `cv_results.parquet` (SMOTE matrices NOT used — SMOTE lives inside the LogReg pipeline) | `tuning_results.parquet`, `threshold_sweep.parquet`, `best_params.joblib`, `tuning_selection.joblib` (leader + threshold), `models/*_tuned.joblib`, `models/final_model.joblib` |
 | `notebooks/evaluation.ipynb` | 7. Evaluation | `X_test`/`y_test` + `models/*_tuned.joblib` + `tuning_selection.joblib`, `tuning_results.parquet`, `threshold_sweep.parquet`, `cv_results.parquet` | `evaluation_results.parquet` (test bake-off), `final_evaluation.joblib` (confirmed model + test metrics), 4 PNGs in `outputs/`; `models/final_model.joblib` re-pointed only if test contradicts OOF leader |
+| `notebooks/interpretation.ipynb` | 8. Interpretation | `X_test`/`y_test` + `models/final_model.joblib` + `final_evaluation.joblib` (threshold), `scaler.joblib`, `scale_cols.joblib` | `shap_importance.parquet` (full ranking + SHAP/impurity/permutation + per-method ranks), `shap_values_test.parquet` (raw SHAP matrix), `interpretation.joblib` (model, threshold, method, base value, top-10 drivers), 6 PNGs in `outputs/` |
 
 **Convention for future stages (5–8):** load everything you need from `processed/`, persist anything a downstream stage will need.
 
@@ -98,7 +108,8 @@ The project is implemented as **per-stage notebooks** in `notebooks/`. Stages co
 | **5. Modeling** | Complete | `notebooks/modeling.ipynb` — 4 models compared; LogReg (SMOTE) selected as leader |
 | **6. Tuning** | Complete | `notebooks/tuning.ipynb` — RandomForest selected as tuned leader (recall 0.716 OOF); all four families tuned via GridSearchCV on F2; thresholds swept on OOF probabilities |
 | **7. Evaluation** | Complete | `notebooks/evaluation.ipynb` — held-out bake-off; RandomForest confirmed (test recall 0.830, precision 0.315, ROC-AUC 0.766); OOF→test gains generalise; deployed model unchanged |
-| **8. Interpretation** | Pending | — |
+| **8. Interpretation** | Complete | `notebooks/interpretation.ipynb` — SHAP TreeExplainer on deployed RandomForest (test set, base P(Leave)=0.608); importance cross-checked 3 ways; top drivers JobHoppingIndex / OverTime / MonthlyIncome (OverTime leads on permutation-recall); driver→lever HR synthesis; pipeline closed |
+| **9. Prediction UI** | Complete | `app.py` (Streamlit) + `src/preprocess.py` + `src/predict.py` — single-employee form → verdict + P(Leave) + SHAP drivers/levers. `preprocess.py` mirrors the feature-engineering transform; train-only stats (peer-median income, low-income threshold) are recomputed by reproducing the `random_state=42` split. `tests/test_parity.py` confirms the UI transform reproduces `X_test.parquet` and `predict_proba` **exactly** (0.0 diff over all 294 rows). Run: `streamlit run app.py`. See [README_UI.md](README_UI.md) |
 
 ---
 
