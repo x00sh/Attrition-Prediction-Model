@@ -153,3 +153,52 @@
   - `evaluation_results.parquet` — full test bake-off table (metrics + confusion counts per model)
   - `final_evaluation.joblib` — confirmed model, threshold, test metrics, confusion counts, selection rule, leakage note
 - **Figures saved** to `outputs/` (150 dpi PNG, for reports/slides): `confusion_matrices.png`, `roc_curves.png`, `pr_curves.png`, `threshold_tradeoff.png`
+
+---
+
+#### Phase 8 — Interpretation Insights
+
+- **Implemented in `notebooks/interpretation.ipynb`**: addresses the project's second objective — *identify the key drivers of attrition so HR can act*. Explains the deployed model's calls rather than re-measuring its accuracy. **New dependency: `shap`** (`pip install shap`)
+- **Method**: SHAP `TreeExplainer` on the bare tuned **RandomForest** confirmed in Phase 7 (a plain sklearn estimator, so the explainer applies directly — no pipeline to unwrap). Exact, additive attribution in **probability units**: for any employee `base_value + sum(SHAP) = predicted P(Leave)`. All explanations computed on the **sealed 294-row test set** at the deployed **threshold 0.49** — never seen in training, never re-tuned. **Base value (mean P(Leave)) = 0.608**
+- **Scaling subtlety**: SHAP *values* are valid in StandardScaler space, but z-scored axes are unreadable — a display copy (`X_test_display`) inverse-transforms the 30 continuous columns back to real units (years/dollars/levels) for plotting, while the model keeps scoring the scaled `X_test`
+- **Importance read three ways** so agreement (not a single method) justifies each driver:
+  - **SHAP mean|abs|** — per-prediction attribution magnitude
+  - **Impurity** (`feature_importances_`) — cheap but biased toward high-cardinality / many-split features
+  - **Permutation importance** — model-agnostic, scored on the **objective metric (recall at 0.49)** on held-out data (`n_repeats=20`): "how much does shuffling this feature cost our ability to catch leavers?"
+- **Top drivers by mean|SHAP|**:
+  | Rank | Feature | SHAP mean\|abs\| |
+  |---|---|---|
+  | 1 | JobHoppingIndex | 0.026 |
+  | 2 | OverTime | 0.023 |
+  | 3 | MonthlyIncome | 0.021 |
+  | 4 | StockOptionLevel | 0.020 |
+  | 5 | Age | 0.019 |
+  | 6 | Single_OT | 0.019 |
+  | 7 | TotalWorkingYears | 0.016 |
+  | 8 | YearsWithCurrManager | 0.015 |
+  | 9 | YearsAtCompany | 0.013 |
+  | 10 | JobLevel | 0.013 |
+- **Permutation (recall) reorders the top**: **OverTime is the single biggest recall driver (0.076)**, then `SatisfactionComposite` (0.046) and `MonthlyIncome` (0.040). Several tenure features that score high on SHAP/impurity (`TotalWorkingYears`, `YearsWithCurrManager`, `YearsAtCompany`) have ~zero or slightly negative permutation-recall — important to the model's probability shape but not to *catching leavers*. The features that survive all three views are the trustworthy drivers
+- **Drivers confirm the EDA themes and the engineered signals**: overtime, absolute and peer-relative income, early tenure, `Single_OT`, job-hopping, low engagement, and promotion-overdue all surface — the Phase 3 feature engineering paid off (`JobHoppingIndex`, `Single_OT` rank top-6)
+- **Direction of effect (beeswarm)**: `OverTime = 1`, low income, and short tenure push toward Leave; high satisfaction/engagement push toward Stay — signs match the EDA
+- **Local case studies (waterfall plots)**: the most confidently caught leaver (true positive) shows what the model keys on when it gets a save right; the most under-scored missed leaver (the false negative with the lowest predicted probability) shows where its signals fall short — the honest counterpart to the success story
+- **Business synthesis (drivers → levers)**: each top driver mapped to the retention action it implies (e.g. cap sustained overtime, review below-band pay in high-attrition roles, extend equity to at-risk mid-level staff, front-load first-two-year mentoring, secure job-hoppers with growth/recognition). This ranked, actionable shortlist is the artifact HR consumes
+- **Artifacts persisted** to `processed/`:
+  - `shap_importance.parquet` — full feature ranking with SHAP, impurity, and permutation measures plus per-method ranks
+  - `shap_values_test.parquet` — raw SHAP value matrix aligned to the test index, for custom slicing
+  - `interpretation.joblib` — model, threshold, method, base value, and top-10 drivers (compact summary)
+- **Figures saved** to `outputs/` (150 dpi PNG): `shap_bar.png`, `shap_summary.png`, `importance_comparison.png`, `shap_dependence.png`, `shap_waterfall_tp.png`, `shap_waterfall_fn.png`
+- **Pipeline closed**: EDA → preprocessing → features → imbalance → modeling → tuning → evaluation → interpretation
+
+---
+
+#### Phase 9 — Prediction UI Insights
+
+- **Implemented as `app.py` (Streamlit) + `src/preprocess.py` + `src/predict.py`** — not a notebook. HR enters one employee's raw details in a grouped form and gets a Leave/Stay verdict, `P(Leave)`, and the per-employee SHAP drivers with retention levers. Run with `streamlit run app.py`. See [README_UI.md](README_UI.md)
+- **The hard part is the transform, not the model.** The deployed model is a bare `RandomForestClassifier` expecting a **56-column, scaled** vector; the form collects ~30 *raw* fields. `src/preprocess.py` replays the exact training pipeline — encode → engineer 13 features → scale 30 continuous columns — and flags a leaver at `P(Leave) ≥ 0.49`. The logic is a faithful copy of `notebooks/feature-engineering.ipynb`'s `engineer()` / scaling cells
+- **Train-only constants were never persisted as artifacts.** Two engineered features depend on statistics computed on the *train split only*: the peer-median income table (`JobRole × JobLevel`), the global fallback median, and the 33rd-percentile low-income threshold. Rather than hardcode a brittle lookup table, `preprocess._train_constants()` recomputes them by reproducing the deterministic split (`train_test_split(..., test_size=0.20, stratify=y, random_state=42)`) from the raw CSV — row membership depends only on `(n, y, random_state)`, so the recovered train rows are identical to the notebook's
+- **Single-row one-hot pitfall avoided**: `pd.get_dummies(drop_first=True)` on a one-row frame cannot infer the full category set (and would wrongly drop the only present level). Instead dummies are written directly against the canonical column names from `X_train.parquet`, then `reindex(fill_value=0)` zeroes absent dummies — including each reference category. This also surfaced that the dropped `Department` reference is **Human Resources** (alphabetical-first), reconstructing column order from the persisted matrix rather than trusting summaries
+- **Correctness gate (`tests/test_parity.py`)**: reproduces the test split, runs every raw test row through the UI transform, and asserts equality with the persisted `X_test.parquet` and the model's `predict_proba`. Result: **max abs diff 0.000e+00 over all 294 rows × 56 cols** — the UI scores employees with the exact pipeline the model was trained and evaluated on. Threshold confirmed 0.49; a hand-built high-risk profile scores 0.92 vs 0.32 for a low-risk one
+- **Explainability reuses Phase 8**: `src/predict.py` builds a `shap.TreeExplainer` on the deployed model and returns the top drivers by |SHAP| for the single input, with values shown in human-readable units (inverse-scaled). The `driver → retention lever` map is copied verbatim from the interpretation notebook, so the UI's advice matches the documented HR synthesis. Includes the `normalize_shap`/`normalize_base` shims for SHAP-version robustness
+- **Dependencies**: inference needs only `joblib`, `scikit-learn`, `pandas`, `numpy`; the UI adds `streamlit`, `matplotlib`, `shap`, `pyarrow` (see `requirements.txt`). The persisted artifacts were pickled with scikit-learn 1.7.x; loading under 1.9.0 works exactly (parity is 0.0) but logs a benign `InconsistentVersionWarning`
+- **End-to-end verified** via Streamlit `AppTest` (`tests/test_app_smoke.py`): form renders 7 dropdowns + 23 numeric inputs, submission produces a verdict with no exceptions (default-median employee → "LIKELY TO STAY", P(Leave) 35%)
