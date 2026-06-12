@@ -89,16 +89,22 @@ def collect_inputs():
         fields = groups[group]
 
         if group == "Compensation":
+            other_comp = [n for n in fields if n not in RATE_FIELDS and n != "MonthlyIncome"]
+            comp_cols = st.columns(3)
             mi_meta = META["MonthlyIncome"]
-            raw["MonthlyIncome"] = st.number_input(
-                mi_meta["label"],
-                min_value=mi_meta["min"],
-                max_value=mi_meta["max"],
-                value=mi_meta["default"],
-                step=1,
-                key="MonthlyIncome",
-                on_change=_on_income_change,
-            )
+            with comp_cols[0]:
+                raw["MonthlyIncome"] = st.number_input(
+                    mi_meta["label"],
+                    min_value=mi_meta["min"],
+                    max_value=mi_meta["max"],
+                    value=mi_meta["default"],
+                    step=1,
+                    key="MonthlyIncome",
+                    on_change=_on_income_change,
+                )
+            for i, name in enumerate(other_comp):
+                with comp_cols[i + 1]:
+                    raw[name] = render_field(name)
 
             with st.expander(
                 "Rate details — inferred from monthly income (expand to override)",
@@ -123,12 +129,6 @@ def collect_inputs():
                             on_change=_on_rate_change,
                             args=(name,),
                         )
-
-            other_comp = [n for n in fields if n not in RATE_FIELDS and n != "MonthlyIncome"]
-            comp_cols = st.columns(3)
-            for i, name in enumerate(other_comp):
-                with comp_cols[i]:
-                    raw[name] = render_field(name)
 
         else:
             cols = st.columns(3)

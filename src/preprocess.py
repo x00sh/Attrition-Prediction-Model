@@ -106,6 +106,12 @@ FIELD_SPEC = [
 
 GROUP_ORDER = ["Job", "Compensation", "Satisfaction", "Tenure & career", "Demographics"]
 
+# Dataset-derived ranges don't always cover the full valid domain for these fields.
+FIELD_RANGE_OVERRIDES = {
+    "PerformanceRating": {"min": 1, "max": 4},
+    "PercentSalaryHike": {"min": 1, "max": 25},
+}
+
 
 @lru_cache(maxsize=1)
 def _raw_df():
@@ -176,6 +182,8 @@ def field_defaults():
             entry["min"] = int(col.min())
             entry["max"] = int(col.max())
             entry["default"] = int(round(col.median()))
+            if name in FIELD_RANGE_OVERRIDES:
+                entry.update(FIELD_RANGE_OVERRIDES[name])
         meta[name] = entry
     return meta
 
